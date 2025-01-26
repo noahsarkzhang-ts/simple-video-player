@@ -4,6 +4,7 @@
 #include "libavcodec/avcodec.h"
 #include "libavformat/avformat.h"
 #include "libswscale/swscale.h"
+#include "libavutil/imgutils.h"
 #include "SDL2/SDL.h"
 
 //Refresh Event
@@ -39,6 +40,7 @@ int main(int argc, char* argv[])
     AVCodecContext	*pCodecCtx;
     AVCodec			*pCodec;
     AVFrame	*pFrame,*pFrameYUV;
+    int  buf_size;
     uint8_t *out_buffer;
     AVPacket *packet;
     int ret, got_picture;
@@ -176,16 +178,47 @@ int main(int argc, char* argv[])
     pFrame=av_frame_alloc();
     pFrameYUV=av_frame_alloc();
 
-    out_buffer=(uint8_t *)av_malloc(avpicture_get_size(AV_PIX_FMT_YUV420P, pCodecCtx->width, pCodecCtx->height));
-    avpicture_fill((AVPicture *)pFrameYUV, out_buffer, AV_PIX_FMT_YUV420P, pCodecCtx->width, pCodecCtx->height);
+    // 为AVFrame.*data[]手工分配缓冲区，用于存储sws_scale()中目的帧视频数据
+    //     pFrame的data_buffer由av_read_frame()分配，因此不需手工分配
+    //     pFrameYUV的data_buffer无处分配，因此在此处手工分配
+    buf_size = av_image_get_buffer_size(AV_PIX_FMT_YUV420P,
+                                        pCodecCtx->width,
+                                        pCodecCtx->height,
+                                        1
+    );
+    // buffer将作为p_frm_yuv的视频数据缓冲区
+    out_buffer = (uint8_t *)av_malloc(buf_size);
+    // 使用给定参数设定pFrameYUV->data和pFrameYUV->linesize
+    av_image_fill_arrays(pFrameYUV->data,           // dst data[]
+                         pFrameYUV->linesize,       // dst linesize[]
+                         out_buffer,                    // src buffer
+                         AV_PIX_FMT_YUV420P,        // pixel format
+                         pCodecCtx->width,        // width
+                         pCodecCtx->height,       // height
+                         1                          // align
+    );
     packet=(AVPacket *)av_malloc(sizeof(AVPacket));
     //Output Info-----------------------------
     printf("--------------- File Information ----------------\n");
     av_dump_format(pFormatCtx,0,filepath,0);
     printf("-------------------------------------------------\n");
-    img_convert_ctx = sws_getContext(pCodecCtx->width, pCodecCtx->height, pCodecCtx->pix_fmt,
-                                     pCodecCtx->width, pCodecCtx->height, AV_PIX_FMT_YUV420P, SWS_BICUBIC, NULL, NULL, NULL);
-
+    // A7. 初始化SWS context，用于后续图像转换
+    //     此处第6个参数使用的是FFmpeg中的像素格式，对比参考注释B4
+    //     FFmpeg中的像素格式AV_PIX_FMT_YUV420P对应SDL中的像素格式SDL_PIXELFORMAT_IYUV
+    //     如果解码后得到图像的不被SDL支持，不进行图像转换的话，SDL是无法正常显示图像的
+    //     如果解码后得到图像的能被SDL支持，则不必进行图像转换
+    //     这里为了编码简便，统一转换为SDL支持的格式AV_PIX_FMT_YUV420P==>SDL_PIXELFORMAT_IYUV
+    img_convert_ctx = sws_getContext(pCodecCtx->width,    // src width
+                                     pCodecCtx->height,   // src height
+                                     pCodecCtx->pix_fmt,  // src format
+                                     pCodecCtx->width,    // dst width
+                                     pCodecCtx->height,   // dst height
+                                     AV_PIX_FMT_YUV420P,    // dst format
+                                     SWS_BICUBIC,           // flags
+                                     NULL,                  // src filter
+                                     NULL,                  // dst filter
+                                     NULL                   // param
+    );
 
     if(SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER)) {
         printf( "Could not initialize SDL - %s\n", SDL_GetError());
